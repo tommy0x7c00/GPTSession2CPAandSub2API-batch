@@ -405,6 +405,13 @@
         border-color: var(--accent);
       }
 
+      .textarea-shell.is-dragging textarea {
+        border-color: var(--accent);
+        background: #eaf5f7;
+        outline: 2px dashed rgba(36, 80, 90, 0.42);
+        outline-offset: -4px;
+      }
+
       textarea[readonly] {
         background: #f8fafb;
       }
@@ -710,11 +717,13 @@
               <button class="button button-secondary" id="load-example" type="button">填入示例结构</button>
               <button class="button button-ghost" id="clear-input" type="button">清空</button>
             </div>
-            <textarea
-              id="session-input"
-              spellcheck="false"
-              placeholder='{"user":{"email":"mark@example.com"},"expires":"2026-08-06T14:29:36.155Z","account":{"id":"...","planType":"plus"},"accessToken":"...","sessionToken":"..."}'
-            ></textarea>
+            <div class="textarea-shell" id="input-drop-zone">
+              <textarea
+                id="session-input"
+                spellcheck="false"
+                placeholder='{"user":{"email":"mark@example.com"},"expires":"2026-08-06T14:29:36.155Z","account":{"id":"...","planType":"plus"},"accessToken":"...","sessionToken":"..."}'
+              ></textarea>
+            </div>
             <div class="status-line" id="input-status">等待输入。</div>
           </div>
         </section>
@@ -793,6 +802,8 @@
           converted: [],
           skipped: [],
           outputText: "",
+          dragDepth: 0,
+          fileReadVersion: 0,
         };
 
         const elements = {
@@ -804,6 +815,7 @@
           fileInput: document.querySelector("#file-input"),
           formatButtons: Array.from(document.querySelectorAll("[data-format]")),
           input: document.querySelector("#session-input"),
+          inputDropZone: document.querySelector("#input-drop-zone"),
           inputStatus: document.querySelector("#input-status"),
           issues: document.querySelector("#issues"),
           loadExample: document.querySelector("#load-example"),
@@ -1541,6 +1553,16 @@
           element.classList.toggle("is-error", tone === "error");
         }
 
+        function hasFilePayload(event) {
+          const transfer = event.dataTransfer;
+          return Boolean(transfer?.files?.length) || Array.from(transfer?.types || []).includes("Files");
+        }
+
+        function resetFileDropZone() {
+          state.dragDepth = 0;
+          elements.inputDropZone.classList.remove("is-dragging");
+        }
+
         function updateOutput() {
           const hasConverted = state.converted.length > 0;
           let outputText = "";
@@ -1664,18 +1686,23 @@
         }
 
         async function readFiles(files) {
-          const jsonFiles = Array.from(files).filter((file) => file.name.toLowerCase().endsWith(".json"));
+          const readVersion = ++state.fileReadVersion;
+          const jsonFiles = Array.from(files || []).filter((file) => file.name.toLowerCase().endsWith(".json"));
           if (!jsonFiles.length) {
             setStatus(elements.inputStatus, "没有选择 JSON 文件。", "error");
             return;
           }
 
+          setStatus(elements.inputStatus, `正在读取 ${jsonFiles.length} 个 JSON 文件。`);
           const documents = [];
           const skipped = [];
 
           for (const file of jsonFiles) {
             try {
               const text = await file.text();
+              if (readVersion !== state.fileReadVersion) {
+                return;
+              }
               const parsed = JSON.parse(text);
               const found = collectSessionLikeObjects(parsed, file.webkitRelativePath || file.name);
               if (!found.length) {
@@ -1693,6 +1720,10 @@
                 reason: error instanceof Error ? error.message : "无法读取文件",
               });
             }
+          }
+
+          if (readVersion !== state.fileReadVersion) {
+            return;
           }
 
           const now = new Date();
@@ -1734,7 +1765,10 @@
           });
         });
 
-        elements.input.addEventListener("input", scheduleConvert);
+        elements.input.addEventListener("input", () => {
+          state.fileReadVersion += 1;
+          scheduleConvert();
+        });
         elements.copyOutput.addEventListener("click", copyOutput);
         elements.downloadOutput.addEventListener("click", downloadOutput);
         elements.pickFiles.addEventListener("click", () => elements.fileInput.click());
@@ -1743,12 +1777,74 @@
           event.target.value = "";
         });
 
+        elements.inputDropZone.addEventListener("dragenter", (event) => {
+          if (!hasFilePayload(event)) {
+            return;
+          }
+
+          event.preventDefault();
+          state.dragDepth += 1;
+          elements.inputDropZone.classList.add("is-dragging");
+        });
+
+        elements.inputDropZone.addEventListener("dragover", (event) => {
+          if (!hasFilePayload(event)) {
+            return;
+          }
+
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          elements.inputDropZone.classList.add("is-dragging");
+        });
+
+        elements.inputDropZone.addEventListener("dragleave", (event) => {
+          if (!hasFilePayload(event)) {
+            return;
+          }
+
+          state.dragDepth = Math.max(0, state.dragDepth - 1);
+          if (!state.dragDepth) {
+            elements.inputDropZone.classList.remove("is-dragging");
+          }
+        });
+
+        elements.inputDropZone.addEventListener("drop", async (event) => {
+          if (!hasFilePayload(event)) {
+            return;
+          }
+
+          event.preventDefault();
+          event.stopPropagation?.();
+          resetFileDropZone();
+          await readFiles(event.dataTransfer.files);
+        });
+
+        document.addEventListener("dragover", (event) => {
+          if (hasFilePayload(event)) {
+            event.preventDefault();
+          }
+        });
+
+        document.addEventListener("drop", (event) => {
+          if (!hasFilePayload(event)) {
+            return;
+          }
+
+          event.preventDefault();
+          resetFileDropZone();
+          if (!elements.inputDropZone.contains(event.target)) {
+            setStatus(elements.inputStatus, "请将 JSON 文件拖入输入框，或使用“选择文件”。", "error");
+          }
+        });
+
         elements.clearInput.addEventListener("click", () => {
+          state.fileReadVersion += 1;
           elements.input.value = "";
           scheduleConvert();
         });
 
         elements.loadExample.addEventListener("click", () => {
+          state.fileReadVersion += 1;
           elements.input.value = JSON.stringify(exampleSession, null, 2);
           scheduleConvert();
         });

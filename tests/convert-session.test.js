@@ -63,6 +63,10 @@ function loadPageScript() {
 
   const document = {
     body: createFakeElement("body"),
+    listeners: {},
+    addEventListener(type, handler) {
+      this.listeners[type] = handler;
+    },
     createElement(selector) {
       return createFakeElement(selector);
     },
@@ -438,6 +442,15 @@ function testCodexManagerAuthJsonPreservesRealRefreshAndMetadata() {
   assert.equal(authJson.meta.chatgpt_account_id, "chatgpt-account-1");
 }
 
+function testJsonDropHandlersAreRegistered() {
+  const { elements } = loadPageScript();
+  const dropZone = elements.get("#input-drop-zone");
+
+  ["dragenter", "dragover", "dragleave", "drop"].forEach((type) => {
+    assert.equal(typeof dropZone.listeners[type], "function", `missing ${type} listener on ${dropZone.selector}`);
+  });
+}
+
 testSub2apiAccountUsesAccessTokenExpiry();
 testSub2apiAccountsUseTheirOwnAccessTokenExpiry();
 testSub2apiAccountWithRefreshTokenOmitsAccessTokenExpiry();
@@ -448,4 +461,5 @@ testCodexAuthJsonMatchesNativeShapeWhenMissingRefreshToken();
 testCodexAuthJsonPreservesRealRefreshTokenAndIdToken();
 testCodexManagerAuthJsonUsesEmptyRefreshTokenWhenMissing();
 testCodexManagerAuthJsonPreservesRealRefreshAndMetadata();
+testJsonDropHandlersAreRegistered();
 console.log("convert-session tests passed");

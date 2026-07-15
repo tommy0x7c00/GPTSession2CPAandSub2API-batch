@@ -43,6 +43,8 @@ ChatGPT Web session 通常不包含 OAuth 文件里常见的 `refresh_token`，�
 
 也支持粘贴或拖入 Codex-Manager 批量导入 JSON，例如包含 `tokens.access_token`、`tokens.refresh_token`、`tokens.id_token` 和 `meta.label`。
 
+也支持粘贴「卡密内容」式文本：即使整段不是合法 JSON（例如前面带有 `=== 使用说明 ===`、`=== 卡密内容 ===` 之类的说明文字或链接），只要其中每行是一个独立的账号对象（NDJSON，token 位于 `credentials.access_token`，并可带 `credentials.email`、`credentials.chatgpt_account_id`、`credentials.plan_type` 等字段），页面会自动跳过说明文字并逐行解析出全部账号。
+
 页面也会尝试从 `accessToken` 的 JWT payload 中补充邮箱、账号 ID、用户 ID、计划类型和过期时间。
 
 ## 输出格式

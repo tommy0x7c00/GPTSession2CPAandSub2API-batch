@@ -438,6 +438,56 @@ function testCodexManagerAuthJsonPreservesRealRefreshAndMetadata() {
   assert.equal(authJson.meta.chatgpt_account_id, "chatgpt-account-1");
 }
 
+function testParsesCardKeyNdjsonDumpWithPreamble() {
+  const { elements } = loadPageScript();
+  const input = elements.get("#session-input");
+  const output = elements.get("#output");
+
+  const accountLine = (email, accountId, exp) =>
+    JSON.stringify({
+      name: "Emma Williams",
+      platform: "openai",
+      type: "oauth",
+      expires_at: exp,
+      auto_pause_on_expired: true,
+      concurrency: 10,
+      priority: 1,
+      credentials: {
+        access_token: jwtWithPayload({
+          exp,
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: accountId,
+            chatgpt_plan_type: "k12",
+          },
+          "https://api.openai.com/profile": { email },
+        }),
+        chatgpt_account_id: accountId,
+        email,
+        plan_type: "k12",
+      },
+      extra: { email, source: "chatgpt_web_session" },
+    });
+
+  input.value = [
+    "=== 使用说明 ===",
+    "cpa sub2 json转换格式地址 在sub2 里使用at导入就可以使用codex https://example.com/GPTSession2CPAandSub2API/",
+    "",
+    "=== 卡密内容 ===",
+    accountLine("a@outlook.com", "acct-a", 1784952120),
+    accountLine("b@outlook.com", "acct-b", 1784952127),
+  ].join("\n");
+  dispatch(input, "input");
+
+  const document = JSON.parse(output.value);
+
+  assert.equal(document.accounts.length, 2, "both NDJSON accounts should parse past the preamble");
+  assert.equal(document.accounts[0].platform, "openai");
+  assert.equal(document.accounts[0].credentials.email, "a@outlook.com");
+  assert.equal(document.accounts[0].expires_at, 1784952120);
+  assert.equal(document.accounts[1].credentials.email, "b@outlook.com");
+  assert.equal(document.accounts[1].expires_at, 1784952127);
+}
+
 testSub2apiAccountUsesAccessTokenExpiry();
 testSub2apiAccountsUseTheirOwnAccessTokenExpiry();
 testSub2apiAccountWithRefreshTokenOmitsAccessTokenExpiry();
@@ -448,4 +498,5 @@ testCodexAuthJsonMatchesNativeShapeWhenMissingRefreshToken();
 testCodexAuthJsonPreservesRealRefreshTokenAndIdToken();
 testCodexManagerAuthJsonUsesEmptyRefreshTokenWhenMissing();
 testCodexManagerAuthJsonPreservesRealRefreshAndMetadata();
+testParsesCardKeyNdjsonDumpWithPreamble();
 console.log("convert-session tests passed");

@@ -49,7 +49,7 @@ function createFakeElement(selector, options = {}) {
   };
 }
 
-function loadPageScript() {
+function loadPageScript(overrides = {}) {
   const htmlPath = path.join(__dirname, "..", "docs", "index.html");
   const html = fs.readFileSync(htmlPath, "utf8");
   const match = html.match(/<script>\s*([\s\S]*?)\s*<\/script>\s*<\/body>/);
@@ -94,17 +94,19 @@ function loadPageScript() {
     clearTimeout,
     console,
     document,
+    URLSearchParams,
     navigator: {
       clipboard: {
         async writeText() {},
       },
     },
     setTimeout,
+    ...overrides,
   };
 
   vm.runInNewContext(match[1], context, { filename: "docs/index.html" });
 
-  return { elements, formatButtons };
+  return { context, elements, formatButtons };
 }
 
 function dispatch(element, type) {
@@ -488,15 +490,122 @@ function testParsesCardKeyNdjsonDumpWithPreamble() {
   assert.equal(document.accounts[1].expires_at, 1784952127);
 }
 
-testSub2apiAccountUsesAccessTokenExpiry();
-testSub2apiAccountsUseTheirOwnAccessTokenExpiry();
-testSub2apiAccountWithRefreshTokenOmitsAccessTokenExpiry();
-testSyntheticIdTokenHasCodexParseableJwtFormat();
-testAxonHubAuthJsonUsesPlaceholderRefreshTokenWhenMissing();
-testAxonHubAuthJsonPreservesRealRefreshToken();
-testCodexAuthJsonMatchesNativeShapeWhenMissingRefreshToken();
-testCodexAuthJsonPreservesRealRefreshTokenAndIdToken();
-testCodexManagerAuthJsonUsesEmptyRefreshTokenWhenMissing();
-testCodexManagerAuthJsonPreservesRealRefreshAndMetadata();
-testParsesCardKeyNdjsonDumpWithPreamble();
-console.log("convert-session tests passed");
+async function testImportsConvertedAccountsWithAdminKey() {
+  const requests = [];
+  const { elements, formatButtons } = loadPageScript({
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            code: 0,
+            data: {
+              account_created: 1,
+              account_failed: 0,
+              proxy_created: 0,
+            },
+          };
+        },
+      };
+    },
+  });
+  const input = elements.get("#session-input");
+  const importButton = elements.get("#import-sub2api");
+
+  dispatch(formatButtons.find((button) => button.dataset.format === "cpa"), "click");
+  elements.get("#sub2api-url").value = "http://127.0.0.1:18080";
+  elements.get("#sub2api-key").value = "admin-test-key";
+  input.value = JSON.stringify({
+    user: { email: "import@example.com" },
+    accessToken: jwtWithPayload({
+      exp: 1780473960,
+      "https://api.openai.com/auth": { chatgpt_account_id: "account-import" },
+    }),
+  });
+  dispatch(input, "input");
+  await importButton.listeners.click({ target: importButton });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "http://127.0.0.1:18080/api/v1/admin/accounts/data");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers["x-api-key"], "admin-test-key");
+  assert.equal(requests[0].options.headers.Authorization, undefined);
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.skip_default_group_bind, true);
+  assert.equal(body.data.accounts.length, 1);
+  assert.equal(body.data.accounts[0].credentials.email, "import@example.com");
+  assert.match(elements.get("#import-status").textContent, /账号新增 1/);
+}
+
+async function testUsesEmbeddedAdminSessionWithoutKey() {
+  const requests = [];
+  let cleanedUrl = "";
+  const { elements } = loadPageScript({
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { code: 0, data: { account_created: 1, account_failed: 0 } };
+        },
+      };
+    },
+    history: {
+      replaceState(_state, _title, url) {
+        cleanedUrl = url;
+      },
+    },
+    location: {
+      hash: "",
+      origin: "https://pages.example.com",
+      pathname: "/tools/",
+      search: "?token=admin-jwt&theme=dark",
+    },
+  });
+  const input = elements.get("#session-input");
+  const importButton = elements.get("#import-sub2api");
+
+  assert.equal(elements.get("#sub2api-url").value, "https://pages.example.com/tools/sub2api-api");
+  assert.equal(elements.get("#sub2api-key").value, "");
+  assert.equal(cleanedUrl, "/tools/?theme=dark");
+  assert.match(elements.get("#import-status").textContent, /无需填写 Key/);
+
+  input.value = JSON.stringify({
+    user: { email: "jwt@example.com" },
+    accessToken: jwtWithPayload({
+      exp: 1780473960,
+      "https://api.openai.com/auth": { chatgpt_account_id: "account-jwt" },
+    }),
+  });
+  dispatch(input, "input");
+  await importButton.listeners.click({ target: importButton });
+
+  assert.equal(requests[0].url, "https://pages.example.com/tools/sub2api-api/admin/accounts/data");
+  assert.equal(requests[0].options.headers.Authorization, "Bearer admin-jwt");
+  assert.equal(requests[0].options.headers["x-api-key"], undefined);
+}
+
+async function main() {
+  testSub2apiAccountUsesAccessTokenExpiry();
+  testSub2apiAccountsUseTheirOwnAccessTokenExpiry();
+  testSub2apiAccountWithRefreshTokenOmitsAccessTokenExpiry();
+  testSyntheticIdTokenHasCodexParseableJwtFormat();
+  testAxonHubAuthJsonUsesPlaceholderRefreshTokenWhenMissing();
+  testAxonHubAuthJsonPreservesRealRefreshToken();
+  testCodexAuthJsonMatchesNativeShapeWhenMissingRefreshToken();
+  testCodexAuthJsonPreservesRealRefreshTokenAndIdToken();
+  testCodexManagerAuthJsonUsesEmptyRefreshTokenWhenMissing();
+  testCodexManagerAuthJsonPreservesRealRefreshAndMetadata();
+  testParsesCardKeyNdjsonDumpWithPreamble();
+  await testImportsConvertedAccountsWithAdminKey();
+  await testUsesEmbeddedAdminSessionWithoutKey();
+  console.log("convert-session tests passed");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

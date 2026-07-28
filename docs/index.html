@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
     <title>ChatGPT Session -> CPA / sub2api / Cockpit / Codex / AxonHub / Codex-Manager</title>
     <meta name="theme-color" content="#24505a" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" sizes="any" />
@@ -154,6 +155,62 @@
         gap: 12px;
         align-items: center;
         margin-bottom: 12px;
+      }
+
+      .import-bar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto;
+        gap: 10px;
+        align-items: end;
+        margin-bottom: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .field span {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .field input {
+        width: 100%;
+        min-height: 38px;
+        padding: 8px 10px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        outline: none;
+        color: var(--text);
+        background: var(--surface);
+      }
+
+      .field input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .import-status {
+        grid-column: 1 / -1;
+        min-height: 20px;
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.4;
+      }
+
+      .import-status.is-ok {
+        color: var(--success);
+      }
+
+      .import-status.is-error {
+        color: var(--danger);
       }
 
       .segmented {
@@ -562,6 +619,10 @@
           display: block;
         }
 
+        .import-bar {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+
         .panel + .panel {
           margin-top: 12px;
         }
@@ -587,6 +648,14 @@
         .input-actions {
           display: grid;
           grid-template-columns: 1fr;
+        }
+
+        .import-bar {
+          grid-template-columns: 1fr;
+        }
+
+        .import-status {
+          grid-column: 1;
         }
 
         .button {
@@ -640,7 +709,7 @@
         </div>
         <div class="meta-row" aria-label="处理方式">
           <span class="meta-chip">浏览器本地解析</span>
-          <span class="meta-chip">不上传 token</span>
+          <span class="meta-chip">仅导入到指定实例</span>
           <span class="meta-chip">不写入存储</span>
           <a
             class="meta-chip github-link"
@@ -671,6 +740,26 @@
           <button class="button button-secondary" id="copy-output" type="button" disabled>复制输出</button>
           <button class="button button-primary" id="download-output" type="button" disabled>下载 JSON</button>
         </div>
+      </section>
+
+      <section class="import-bar" aria-label="导入 sub2api">
+        <label class="field">
+          <span>Sub2API API 地址</span>
+          <input id="sub2api-url" type="url" spellcheck="false" autocomplete="url" />
+        </label>
+        <label class="field">
+          <span>管理员 Key</span>
+          <input
+            id="sub2api-key"
+            type="password"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="从管理员菜单打开时可留空"
+          />
+        </label>
+        <button class="button button-secondary" id="test-sub2api" type="button">测试连接</button>
+        <button class="button button-primary" id="import-sub2api" type="button" disabled>转换并导入</button>
+        <div class="import-status" id="import-status">填写管理员 Key，或从 sub2api 管理员菜单打开本工具。</div>
       </section>
 
       <section class="workspace">
@@ -793,6 +882,8 @@
           converted: [],
           skipped: [],
           outputText: "",
+          adminToken: "",
+          importing: false,
         };
 
         const elements = {
@@ -805,6 +896,8 @@
           formatButtons: Array.from(document.querySelectorAll("[data-format]")),
           input: document.querySelector("#session-input"),
           inputStatus: document.querySelector("#input-status"),
+          importStatus: document.querySelector("#import-status"),
+          importSub2api: document.querySelector("#import-sub2api"),
           issues: document.querySelector("#issues"),
           loadExample: document.querySelector("#load-example"),
           output: document.querySelector("#output"),
@@ -814,6 +907,9 @@
           statCount: document.querySelector("#stat-count"),
           statErrors: document.querySelector("#stat-errors"),
           statFormat: document.querySelector("#stat-format"),
+          sub2apiKey: document.querySelector("#sub2api-key"),
+          sub2apiUrl: document.querySelector("#sub2api-url"),
+          testSub2api: document.querySelector("#test-sub2api"),
         };
 
         const exampleSession = {
@@ -832,6 +928,117 @@
         };
 
         const AXONHUB_PLACEHOLDER_REFRESH_TOKEN = "__missing_refresh_token__";
+
+        function initializeSub2apiConnection() {
+          const hostedWithProxy = typeof location !== "undefined" && location.pathname.startsWith("/tools");
+          elements.sub2apiUrl.value = hostedWithProxy
+            ? `${location.origin}/tools/sub2api-api`
+            : "http://127.0.0.1:18080/api/v1";
+
+          if (typeof location === "undefined") {
+            return;
+          }
+
+          const params = new URLSearchParams(location.search);
+          state.adminToken = (params.get("token") || "").trim();
+          if (!state.adminToken) {
+            return;
+          }
+
+          params.delete("token");
+          const query = params.toString();
+          const cleanUrl = `${location.pathname}${query ? `?${query}` : ""}${location.hash}`;
+          if (typeof history !== "undefined" && typeof history.replaceState === "function") {
+            history.replaceState(null, "", cleanUrl);
+          }
+          setStatus(elements.importStatus, "已同步当前 sub2api 管理员登录，无需填写 Key。", "ok");
+        }
+
+        function buildSub2apiApiUrl(path) {
+          const base = elements.sub2apiUrl.value.trim().replace(/\/+$/, "");
+          if (!base) {
+            throw new Error("请填写 Sub2API API 地址");
+          }
+          const apiBase = /\/api\/v1$/i.test(base) || /\/tools\/sub2api-api$/i.test(base)
+            ? base
+            : `${base}/api/v1`;
+          return `${apiBase}${path}`;
+        }
+
+        function sub2apiHeaders() {
+          const key = elements.sub2apiKey.value.trim();
+          if (!key && !state.adminToken) {
+            throw new Error("请填写管理员 Key，或从 sub2api 管理员菜单打开本工具");
+          }
+          const headers = { Accept: "application/json" };
+          if (key) {
+            headers["x-api-key"] = key;
+          } else {
+            headers.Authorization = `Bearer ${state.adminToken}`;
+          }
+          return headers;
+        }
+
+        async function sub2apiRequest(path, options = {}) {
+          const headers = { ...sub2apiHeaders(), ...(options.headers || {}) };
+          const response = await fetch(buildSub2apiApiUrl(path), { ...options, headers });
+          let payload;
+          try {
+            payload = await response.json();
+          } catch {
+            throw new Error(`Sub2API 返回了无效响应（HTTP ${response.status}）`);
+          }
+          if (!response.ok || (isPlainObject(payload) && payload.code !== undefined && payload.code !== 0)) {
+            throw new Error(payload?.message || payload?.error || `Sub2API 请求失败（HTTP ${response.status}）`);
+          }
+          return isPlainObject(payload) && payload.code === 0 ? payload.data : payload;
+        }
+
+        async function testSub2apiConnection() {
+          elements.testSub2api.disabled = true;
+          setStatus(elements.importStatus, "正在连接 Sub2API...");
+          try {
+            const data = await sub2apiRequest("/admin/settings/admin-api-key");
+            const keyState = data?.masked_key ? `，当前 Key：${data.masked_key}` : "";
+            setStatus(elements.importStatus, `连接成功${keyState}。`, "ok");
+          } catch (error) {
+            setStatus(elements.importStatus, error instanceof Error ? error.message : "连接失败", "error");
+          } finally {
+            elements.testSub2api.disabled = false;
+          }
+        }
+
+        async function importToSub2api() {
+          if (!state.converted.length || state.importing) {
+            return;
+          }
+          state.importing = true;
+          elements.importSub2api.disabled = true;
+          setStatus(elements.importStatus, `正在导入 ${state.converted.length} 个账号...`);
+          try {
+            const result = await sub2apiRequest("/admin/accounts/data", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                data: buildSub2apiDocument(state.converted),
+                skip_default_group_bind: true,
+              }),
+            });
+            const created = Number(result?.account_created || 0);
+            const failed = Number(result?.account_failed || 0);
+            const proxyCreated = Number(result?.proxy_created || 0);
+            const tone = failed ? "error" : "ok";
+            const firstError = Array.isArray(result?.errors) && result.errors.length
+              ? ` 首个错误：${result.errors[0].name ? `${result.errors[0].name} - ` : ""}${result.errors[0].message}`
+              : "";
+            setStatus(elements.importStatus, `导入完成：账号新增 ${created}，失败 ${failed}，代理新增 ${proxyCreated}。${firstError}`, tone);
+          } catch (error) {
+            setStatus(elements.importStatus, error instanceof Error ? error.message : "导入失败", "error");
+          } finally {
+            state.importing = false;
+            elements.importSub2api.disabled = !state.converted.length;
+          }
+        }
 
         function isPlainObject(value) {
           return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1614,6 +1821,7 @@
           elements.output.value = outputText;
           elements.copyOutput.disabled = !outputText;
           elements.downloadOutput.disabled = !outputText;
+          elements.importSub2api.disabled = !hasConverted || state.importing;
           elements.statCount.textContent = String(state.converted.length);
           elements.statErrors.textContent = String(state.skipped.length);
           elements.statFormat.textContent = OUTPUT_LABELS[state.format];
@@ -1805,6 +2013,8 @@
         });
 
         elements.input.addEventListener("input", scheduleConvert);
+        elements.importSub2api.addEventListener("click", importToSub2api);
+        elements.testSub2api.addEventListener("click", testSub2apiConnection);
         elements.copyOutput.addEventListener("click", copyOutput);
         elements.downloadOutput.addEventListener("click", downloadOutput);
         elements.pickFiles.addEventListener("click", () => elements.fileInput.click());
@@ -1823,6 +2033,7 @@
           scheduleConvert();
         });
 
+        initializeSub2apiConnection();
         updateOutput();
       })();
     </script>
